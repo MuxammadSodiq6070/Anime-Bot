@@ -1,0 +1,43 @@
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    # 🔒 faqat 1 instance
+    deploy:
+      replicas: 1
+
+    # 🧯 overlap bo‘lmasligi uchun tez to‘xtash
+    stop_grace_period: 3s
+
+    # 📦 logs
+    tty: false
+    stdin_open: false
+
+    # 🧠 minimal resurs (lekin stable)
+    mem_limit: 128m
+    mem_reservation: 64m
+    cpus: "0.25"
+
+    # 🔐 init (zombie process oldini oladi)
+    init: true
+
+    # ⚡ IO va network priority (tezlikni ushlab turadi)
+    oom_score_adj: 200
+
+    # 🧩 healthcheck (yengil, resurs yemaydi)
+    healthcheck:
+      test: ["CMD", "python", "-c", "print('ok')"]
+      interval: 60s
+      timeout: 3s
+      retries: 2
+
+    # 🧱 logging limit (diskni to‘ldirmaydi)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
+        max-file: "2"

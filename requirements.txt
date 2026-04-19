@@ -1,0 +1,6 @@
+aiogram
+python-dotenv
+requests
+httpx
+python-multipart
+python-telegram-bot
