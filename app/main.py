@@ -1123,7 +1123,9 @@ async def ask_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Admin panel handlers
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ Siz admin emassiz!")
+        print(update.effective_user.id, "slaom", ADMIN_ID )
+        logging.info(update.effective_user.id, "slaom", ADMIN_ID )
+        await update.message.reply_text(f"❌ Siz admin emassiz! {update.effective_user.id, "slaom", ADMIN_ID }")
         return
     
     await update.message.reply_text(
@@ -2180,3 +2182,6 @@ if __name__ == '__main__':
     main()
     
 # bu qodni shaxshsan znxrofi terib chiqan agar manbasiz o'girlansa sikaman ko'd o'zgarmasin    
+
+
+
