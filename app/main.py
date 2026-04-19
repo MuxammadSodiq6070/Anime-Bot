@@ -12,7 +12,7 @@ load_dotenv()
 
 
 BOT_TOKEN = getenv("BOT_TOKEN")
-ADMIN_ID = getenv("ADMIN_ID")
+ADMIN_ID = int(getenv("ADMIN_ID"))
 logging.info("Standart sozlamalar bilan ishga tushdi")
 
 # Conversation states - 32 ta qiymat kerak
