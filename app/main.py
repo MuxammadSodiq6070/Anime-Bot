@@ -10,18 +10,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# FAQAT SHU IKKITASINI O'ZGARTIRING - PARAMETRLARNI QABUL QILISH
-if len(sys.argv) > 2:
-    BOT_TOKEN = sys.argv[1]
-    ADMIN_ID = int(sys.argv[2])
-    logging.info(f"Bot {ADMIN_ID} foydalanuvchi uchun ishga tushdi")
-else:
-    # Agar parametr berilmasa, standart qiymatlar
-    BOT_TOKEN = getenv("BOT_TOKEN")
-    ADMIN_ID = getenv("ADMIN_ID")
-    logging.info("Standart sozlamalar bilan ishga tushdi")
+
+BOT_TOKEN = getenv("BOT_TOKEN")
+ADMIN_ID = getenv("ADMIN_ID")
+logging.info("Standart sozlamalar bilan ishga tushdi")
 
 # Conversation states - 32 ta qiymat kerak
+
 (
     SEARCH_NAME, SEARCH_CODE, SEARCH_GENRE,
     ADD_ANIME_NAME, ADD_ANIME_EPISODE, ADD_ANIME_COUNTRY, ADD_ANIME_LANGUAGE, 
