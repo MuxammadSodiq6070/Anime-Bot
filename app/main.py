@@ -1,37 +1,56 @@
 import asyncio
 import logging
 from os import getenv
+from typing import Callable, Dict, Any, Awaitable
 
 from dotenv import load_dotenv
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, BaseMiddleware
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import InlineKeyboardButton, TelegramObject
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.types import InlineKeyboardButton
 
+# Ma'lumotlar bazasi va handlerlar
 from database import Database
 from handlers.user import router as user_router, register_user_handlers
 from handlers.admin import router as admin_router, register_admin_handlers
+from handlers.features import router as features_router
 
+# .env faylini yuklash
 load_dotenv()
-
 BOT_TOKEN = getenv("BOT_TOKEN")
-ADMIN_ID  = int(getenv("ADMIN_ID"))
+ADMIN_ID = int(getenv("ADMIN_ID"))
 
+# Logging sozlamalari
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
+# --- MIDDLEWARE ---
+class DbMiddleware(BaseMiddleware):
+    def __init__(self, db: Database):
+        super().__init__()
+        self.db = db
 
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: Dict[str, Any]
+    ) -> Any:
+        # Ma'lumotlar bazasini barcha handlerlarga argument sifatida o'zatadi
+        data["db"] = self.db
+        return await handler(event, data)
+
+# --- SCHEDULER ---
 async def scheduler(bot: Bot, db: Database):
-    """Har daqiqa rejalashtirilgan postlarni tekshiradi"""
+    """Rejalashtirilgan postlarni tekshirish va yuborish"""
     while True:
         try:
-            pending = db.get_pending_posts()
-            for post in pending:
+            for post in db.get_pending_posts():
                 kb = InlineKeyboardBuilder()
                 bot_me = await bot.get_me()
                 kb.row(InlineKeyboardButton(
@@ -51,45 +70,54 @@ async def scheduler(bot: Bot, db: Database):
                 )
                 try:
                     await bot.send_photo(
-                        chat_id=post['channel'],
+                        chat_id=post['channel'], 
                         photo=post['image'],
-                        caption=caption,
+                        caption=caption, 
                         parse_mode='Markdown',
                         reply_markup=kb.as_markup()
                     )
                     db.mark_post_sent(post['id'])
                     logger.info(f"Scheduled post sent: {post['name']}")
                 except Exception as e:
-                    logger.error(f"Scheduled post error: {e}")
+                    logger.error(f"Post yuborishda xato: {e}")
         except Exception as e:
-            logger.error(f"Scheduler error: {e}")
-        await asyncio.sleep(60)  # Har 60 soniyada tekshiradi
+            logger.error(f"Scheduler xato: {e}")
 
+        await asyncio.sleep(60)
 
+# --- MAIN ---
 async def main():
+    # 1. Obyektlarni main ichida yaratamiz (RuntimeError oldini olish uchun)
     db = Database()
-
-    bot = Bot(
-        token=BOT_TOKEN,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML)
-    )
+    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher(storage=MemoryStorage())
 
+    # 2. Middleware ulash (Routerlardan oldin bo'lishi shart)
+    dp.update.middleware(DbMiddleware(db))
+
+    # 3. Eski uslubdagi handlerlarni ro'yxatdan o'tkazish (agar kerak bo'lsa)
     register_user_handlers(user_router, db, ADMIN_ID)
     register_admin_handlers(admin_router, db, ADMIN_ID)
+    # register_feature_handlers(features_router) shart emas, chunki router mustaqil
 
+    # 4. Routerlarni Dispatcherga ulash (Faqat bir marta!)
     dp.include_router(admin_router)
+    dp.include_router(features_router)
     dp.include_router(user_router)
 
-    logger.info("Bot ishga tushdi...")
+    logger.info("✅ Bot v3 ishga tushdi!")
+    
+    # Eskidan qolib ketgan xabarlarni o'chirib yuborish
     await bot.delete_webhook(drop_pending_updates=True)
 
-    # Scheduler va polling parallel ishlaydi
+    # Bot va Shcedulerni parallel ishga tushirish
     await asyncio.gather(
         dp.start_polling(bot),
         scheduler(bot, db)
     )
 
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Bot to'xtatildi!")
