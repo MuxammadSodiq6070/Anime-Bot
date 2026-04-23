@@ -20,8 +20,15 @@ from keyboards import (
     episode_keyboard, inline_watch_keyboard, TEXTS
 )
 
+from cache.memory import TTLCache
+from services.comments import CommentsService
+from services.recommendations import RecommendationService
+from services.social import SocialService
+
 router = Router()
 TEXTS_LIST = list(TEXTS.values())
+
+cache = TTLCache(default_ttl=60)
 
 class SearchStates(StatesGroup):
     search_name  = State()
@@ -43,6 +50,9 @@ class RatingState(StatesGroup):
 
 class GenreOnboarding(StatesGroup):
     selecting = State()
+
+class CommentState(StatesGroup):
+    writing = State()
 
 
 def register_user_handlers(router: Router, db: Database, admin_id: int):
@@ -379,20 +389,91 @@ def register_user_handlers(router: Router, db: Database, admin_id: int):
     @router.message(F.text.in_({t['profile'] for t in TEXTS_LIST}))
     async def menu_profile(message: Message):
         if _is_off(message.from_user.id): return
-        user = db.get_user(message.from_user.id)
+        uid = message.from_user.id
+        user = db.get_user(uid)
+        social = SocialService(db, cache=cache)
+        counts = social.db.get_follow_counts(uid)
         ref_count = db.get_referral_count(message.from_user.id)
         bot_me = await message.bot.get_me()
         status_badge = "🏅 Premium +" if user['status'] == 'Premium +' else "🆓 Oddiy"
+        last = social.get_profile(uid).get("last_watched") if social.get_profile(uid) else None
+        last_txt = ""
+        if last:
+            last_txt = f"\n🎬 Oxirgi: <b>{last['name']}</b> — {last['episode_number']}/{last['episode']} qism"
         await message.answer(
             f"🧑‍💻 <b>Shaxsiy hisobingiz</b>\n\n"
             f"💰 Balans: <b>{user['balance']} UZS</b>\n"
             f"🪙 Coinlar: <b>{user.get('coins',0)}</b>\n"
             f"🔥 Streak: <b>{user.get('streak',0)} kun</b>\n"
+            f"👥 Followers: <b>{counts['followers']}</b> | Following: <b>{counts['following']}</b>"
+            f"{last_txt}\n"
             f"🆔 ID: <code>{user['user_id']}</code>\n"
             f"💎 Status: <b>{status_badge}</b>\n"
             f"👥 Taklif qilinganlar: <b>{ref_count}</b>\n\n"
             f"🔗 Referral link:\n<code>https://t.me/{bot_me.username}?start=ref_{user['user_id']}</code>",
             reply_markup=profile_keyboard(), parse_mode='HTML')
+
+    # ── Social: activity feed ─────────────────────────────────────────────────
+    @router.callback_query(F.data == "activity_feed")
+    async def activity_feed(call: CallbackQuery):
+        uid = call.from_user.id
+        social = SocialService(db, cache=cache)
+        feed = social.get_feed(uid, limit=15)
+        if not feed:
+            await call.message.answer("📭 Hozircha activity yo'q.")
+            await call.answer()
+            return
+        text = "📰 <b>Activity feed</b>\n\n"
+        kb = InlineKeyboardBuilder()
+        for e in feed[:10]:
+            who = e.get("first_name") or e.get("username") or str(e["user_id"])
+            if e["event_type"] == "started_anime":
+                text += f"▶️ <b>{who}</b> anime boshladi: <b>{e.get('anime_name','')}</b>\n"
+            elif e["event_type"] == "finished_episode":
+                text += f"✅ <b>{who}</b> qism tugatdi: <b>{e.get('anime_name','')}</b> — {e.get('episode_number','?')}-qism\n"
+            kb.row(InlineKeyboardButton(text=f"👤 {who} profili", callback_data=f"view_profile_{e['user_id']}"))
+        kb.row(InlineKeyboardButton(text="🔙 Ortga", callback_data="back_main"))
+        await call.message.answer(text, reply_markup=kb.as_markup(), parse_mode='HTML')
+        await call.answer()
+
+    @router.callback_query(F.data.startswith("view_profile_"))
+    async def view_profile(call: CallbackQuery):
+        target_id = int(call.data.split("_")[-1])
+        social = SocialService(db, cache=cache)
+        p = social.get_profile(target_id)
+        if not p:
+            await call.answer("Topilmadi", show_alert=True)
+            return
+        is_f = social.db.is_following(call.from_user.id, target_id)
+        from keyboards import user_profile_keyboard
+        last = p.get("last_watched")
+        last_txt = ""
+        if last:
+            last_txt = f"\n🎬 Oxirgi: <b>{last['name']}</b> — {last['episode_number']}/{last['episode']}"
+        name = p.get("first_name") or p.get("username") or str(target_id)
+        await call.message.answer(
+            f"👤 <b>{name}</b>\n"
+            f"👥 Followers: <b>{p.get('followers',0)}</b> | Following: <b>{p.get('following',0)}</b>\n"
+            f"🪙 Coinlar: <b>{p.get('coins',0)}</b> | 🔥 Streak: <b>{p.get('streak',0)}</b>"
+            f"{last_txt}",
+            reply_markup=user_profile_keyboard(target_id, is_f),
+            parse_mode='HTML',
+        )
+        await call.answer()
+
+    @router.callback_query(F.data.startswith("follow_"))
+    async def follow_user_cb(call: CallbackQuery):
+        target_id = int(call.data.split("_")[-1])
+        social = SocialService(db, cache=cache)
+        ok = social.follow(call.from_user.id, target_id)
+        await call.answer("✅ Follow" if ok else "⚠️")
+
+    @router.callback_query(F.data.startswith("unfollow_"))
+    async def unfollow_user_cb(call: CallbackQuery):
+        target_id = int(call.data.split("_")[-1])
+        social = SocialService(db, cache=cache)
+        ok = social.unfollow(call.from_user.id, target_id)
+        await call.answer("✅ Unfollow" if ok else "⚠️")
 
     @router.message(F.text.in_({t['contact'] for t in TEXTS_LIST}))
     async def menu_contact(message: Message, state: FSMContext):
@@ -571,6 +652,59 @@ def register_user_handlers(router: Router, db: Database, admin_id: int):
             text += f"👤 <b>{r['first_name']}</b> — ⭐{r['rating']}/10\n<i>{r['review']}</i>\n\n"
         await call.message.answer(text, parse_mode='HTML')
         await call.answer()
+
+    # ── Comments system ────────────────────────────────────────────────────────
+    @router.callback_query(F.data.startswith("comments_"))
+    async def show_comments(call: CallbackQuery, state: FSMContext):
+        anime_id = int(call.data.split("_")[-1])
+        comments = db.get_comments(anime_id, limit=20)
+        anime = db.search_anime_by_id(anime_id)
+        text = f"💬 <b>{anime['name']} — Kommentlar</b>\n\n"
+        if not comments:
+            text += "Hozircha komment yo'q. Birinchi bo'lib yozing!"
+        else:
+            for c in comments[:10]:
+                who = c.get("first_name") or c.get("username") or str(c["user_id"])
+                text += f"🗨 <b>{who}</b>  ❤️{c.get('likes',0)}\n<i>{c['text']}</i>\n"
+                for r in c.get("replies", [])[:2]:
+                    r_who = r.get("first_name") or r.get("username") or str(r["user_id"])
+                    text += f"  ↳ <b>{r_who}</b>: <i>{r['text']}</i>\n"
+                text += "\n"
+
+        kb = InlineKeyboardBuilder()
+        kb.row(InlineKeyboardButton(text="✍️ Komment yozish", callback_data=f"add_comment_{anime_id}"))
+        if comments:
+            kb.row(InlineKeyboardButton(text="❤️ 1-chi kommentga like", callback_data=f"like_comment_{comments[0]['id']}"))
+        kb.row(InlineKeyboardButton(text="🔙 Ortga", callback_data=f"anime_{anime_id}"))
+        await call.message.answer(text, reply_markup=kb.as_markup(), parse_mode='HTML')
+        await call.answer()
+
+    @router.callback_query(F.data.startswith("add_comment_"))
+    async def add_comment_start(call: CallbackQuery, state: FSMContext):
+        anime_id = int(call.data.split("_")[-1])
+        await state.update_data(comment_anime_id=anime_id, comment_parent_id=None)
+        await state.set_state(CommentState.writing)
+        await call.message.answer("✍️ Kommentingizni yozing:")
+        await call.answer()
+
+    @router.message(CommentState.writing)
+    async def add_comment_write(message: Message, state: FSMContext):
+        data = await state.get_data()
+        anime_id = data.get("comment_anime_id")
+        parent_id = data.get("comment_parent_id")
+        text = (message.text or "").strip()
+        if not text:
+            await message.answer("⚠️ Bo'sh komment bo'lmaydi. Qayta yozing:")
+            return
+        db.add_comment(anime_id, message.from_user.id, text, parent_id=parent_id)
+        await state.clear()
+        await message.answer("✅ Komment qo'shildi!")
+
+    @router.callback_query(F.data.startswith("like_comment_"))
+    async def like_comment_cb(call: CallbackQuery):
+        cid = int(call.data.split("_")[-1])
+        ok = db.like_comment(call.from_user.id, cid)
+        await call.answer("❤️" if ok else "✅")
 
     # ── Episode nav ────────────────────────────────────────────────────────────
     @router.callback_query(F.data.startswith("ep_"))
@@ -822,6 +956,15 @@ async def _send_episode(message: Message, db: Database, anime_id: int,
         video=ep['file_id'], caption=caption, parse_mode='HTML',
         protect_content=protect, reply_markup=kb)
     db.save_progress(user_id, anime_id, ep_number)
+    # social + live activity signals
+    try:
+        social = SocialService(db, cache=cache)
+        social.ping_watching(user_id, anime_id)
+        if ep_number == 1:
+            social.log_started_anime(user_id, anime_id)
+        social.log_finished_episode(user_id, anime_id, ep_number)
+    except Exception:
+        pass
 
     # Mission: episode ko'rish
     completed, reward = db.update_mission(user_id, 'watch_episode')

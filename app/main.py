@@ -16,11 +16,17 @@ from database import Database
 from handlers.user import router as user_router, register_user_handlers
 from handlers.admin import router as admin_router, register_admin_handlers
 from handlers.features import router as features_router
+from tasks.background import cache_maintenance_loop
+from cache.memory import TTLCache
+from utils.rate_limit import TokenBucketRateLimiter
 
 # .env faylini yuklash
 load_dotenv()
 BOT_TOKEN = getenv("BOT_TOKEN")
-ADMIN_ID = int(getenv("ADMIN_ID"))
+try:
+    ADMIN_ID = int(getenv("ADMIN_ID") or "0")
+except ValueError:
+    ADMIN_ID = 0
 
 # Logging sozlamalari
 logging.basicConfig(
@@ -43,6 +49,21 @@ class DbMiddleware(BaseMiddleware):
     ) -> Any:
         # Ma'lumotlar bazasini barcha handlerlarga argument sifatida o'zatadi
         data["db"] = self.db
+        return await handler(event, data)
+
+
+class RateLimitMiddleware(BaseMiddleware):
+    def __init__(self, limiter: TokenBucketRateLimiter):
+        super().__init__()
+        self.limiter = limiter
+
+    async def __call__(self, handler, event: TelegramObject, data: Dict[str, Any]):
+        user = getattr(event, "from_user", None)
+        if user:
+            key = f"u:{user.id}"
+            if not self.limiter.allow(key):
+                # silent drop (fast) – prevents bot freeze under spam
+                return
         return await handler(event, data)
 
 # --- SCHEDULER ---
@@ -91,8 +112,11 @@ async def main():
     db = Database()
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher(storage=MemoryStorage())
+    cache = TTLCache(default_ttl=60)
+    limiter = TokenBucketRateLimiter(rate_per_sec=2.0, burst=6)  # fast anti-spam baseline
 
     # 2. Middleware ulash (Routerlardan oldin bo'lishi shart)
+    dp.update.middleware(RateLimitMiddleware(limiter))
     dp.update.middleware(DbMiddleware(db))
 
     # 3. Eski uslubdagi handlerlarni ro'yxatdan o'tkazish (agar kerak bo'lsa)
@@ -113,7 +137,8 @@ async def main():
     # Bot va Shcedulerni parallel ishga tushirish
     await asyncio.gather(
         dp.start_polling(bot),
-        scheduler(bot, db)
+        scheduler(bot, db),
+        cache_maintenance_loop(cache, interval_sec=60),
     )
 
 if __name__ == "__main__":

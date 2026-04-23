@@ -21,15 +21,22 @@ from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardButton
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-
 from database import Database
 
+from config import ADMIN_ID
+from cache.memory import TTLCache
+from services.recommendations import RecommendationService
+from services.shorts import ShortsService
+
 router = Router()
+
+
 
 DNA_EMOJIS = {
     'Action':  '⚔️', 'Romance': '💕', 'Dark': '🌑',
     'Comedy':  '😂', 'Fantasy': '🔮', 'Sci-Fi': '🤖',
 }
+
 
 PREMIUM_TIERS = {
     'Simple':    {'label': '🆓 Oddiy',      'color': '⬜', 'perks': []},
@@ -39,9 +46,10 @@ PREMIUM_TIERS = {
 }
 
 db = Database()
+cache = TTLCache(default_ttl=60)
 
 
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+
 
 
 class AssistantState(StatesGroup):
@@ -229,6 +237,87 @@ async def watch_clips(call: CallbackQuery):
             )
             await asyncio.sleep(0.3)
 
+        await call.answer()
+
+
+# ══════════════════════════════════════════════════════════════════════
+# NEW SHORTS SYSTEM (infinite scroll + engagement tracking)
+# ══════════════════════════════════════════════════════════════════════
+@router.callback_query(F.data == "shorts_v2")
+async def shorts_v2_start(call: CallbackQuery, state: FSMContext):
+        service = ShortsService(db, cache=cache)
+        item = service.get_next(call.from_user.id)
+        if not item:
+            await call.message.answer("📭 Hozircha shorts yo'q!")
+            await call.answer()
+            return
+        await state.update_data(current_short_id=item["id"])
+        service.register_view(item["id"])
+        kb = InlineKeyboardBuilder()
+        kb.row(
+            InlineKeyboardButton(text="❤️ Like", callback_data=f"short_like_{item['id']}"),
+            InlineKeyboardButton(text="⏭ Keyingi", callback_data="short_next"),
+        )
+        if item.get("anime_id"):
+            bot_me = await call.bot.get_me()
+            kb.row(InlineKeyboardButton(text="▶️ To'liq anime", url=f"https://t.me/{bot_me.username}?start={item['anime_id']}"))
+        await call.message.answer_video(video=item["file_id"], reply_markup=kb.as_markup())
+        await call.answer()
+
+
+@router.callback_query(F.data == "short_next")
+async def shorts_v2_next(call: CallbackQuery, state: FSMContext):
+        # mark previous as skipped (no reliable watch-time from Telegram)
+        data = await state.get_data()
+        prev = data.get("current_short_id")
+        service = ShortsService(db, cache=cache)
+        if prev:
+            service.track(call.from_user.id, prev, watch_time=0, skipped=1, rewatched=0)
+        item = service.get_next(call.from_user.id)
+        if not item:
+            await call.answer("Tugadi", show_alert=False)
+            return
+        await state.update_data(current_short_id=item["id"])
+        service.register_view(item["id"])
+        kb = InlineKeyboardBuilder()
+        kb.row(
+            InlineKeyboardButton(text="❤️ Like", callback_data=f"short_like_{item['id']}"),
+            InlineKeyboardButton(text="⏭ Keyingi", callback_data="short_next"),
+        )
+        if item.get("anime_id"):
+            bot_me = await call.bot.get_me()
+            kb.row(InlineKeyboardButton(text="▶️ To'liq anime", url=f"https://t.me/{bot_me.username}?start={item['anime_id']}"))
+        await call.message.answer_video(video=item["file_id"], reply_markup=kb.as_markup())
+        await call.answer()
+
+
+@router.callback_query(F.data.startswith("short_like_"))
+async def shorts_v2_like(call: CallbackQuery):
+        sid = int(call.data.split("_")[-1])
+        service = ShortsService(db, cache=cache)
+        ok = service.like(call.from_user.id, sid)
+        # engagement signal
+        service.track(call.from_user.id, sid, watch_time=5, skipped=0, rewatched=0)
+        await call.answer("❤️" if ok else "✅")
+
+
+# ══════════════════════════════════════════════════════════════════════
+# NEW RECOMMENDATION SYSTEM (formula-based)
+# ══════════════════════════════════════════════════════════════════════
+@router.callback_query(F.data == "recommendations_v2")
+async def recommendations_v2(call: CallbackQuery):
+        rec = RecommendationService(db, cache=cache)
+        items = rec.get_recommended_anime(call.from_user.id, limit=5)
+        if not items:
+            await call.message.answer("📭 Hozircha tavsiya yo'q.")
+            await call.answer()
+            return
+        text = "🎯 <b>Siz uchun tavsiyalar</b>\n\n"
+        kb = InlineKeyboardBuilder()
+        for a in items:
+            text += f"• <b>{a['name']}</b> — {a.get('match_percent', '-') }% | ⭐{a['rating']} | 👁{a.get('views',0)}\n"
+            kb.row(InlineKeyboardButton(text=f"▶️ {a['name']}", callback_data=f"anime_{a['id']}"))
+        await call.message.answer(text, reply_markup=kb.as_markup(), parse_mode='HTML')
         await call.answer()
 
 @router.callback_query(F.data.startswith("clips_anime_"))
@@ -420,7 +509,7 @@ async def premium_info(call: CallbackQuery):
 @router.callback_query(F.data == "ab_test_stats")
 async def ab_test_stats(call: CallbackQuery):
         if call.from_user.id != ADMIN_ID:
-            await call.answer("❌"); return
+            await call.answer(f"{ADMIN_ID} {call.from_user.id}❌"); return
 
         stats = db.get_ab_stats()
         text = "🧪 <b>A/B Test Natijalari</b>\n\n"

@@ -110,6 +110,7 @@ def anime_detail_keyboard(bot_username: str, anime_id: int,
     )
     if has_clips:
         kb.row(InlineKeyboardButton(text="🎬 Shorts ko'r", callback_data=f"clips_anime_{anime_id}"))
+    kb.row(InlineKeyboardButton(text="💬 Kommentlar", callback_data=f"comments_{anime_id}"))
     kb.row(InlineKeyboardButton(text="💬 Sharhlar", callback_data=f"reviews_{anime_id}"))
     if is_vip:
         kb.row(InlineKeyboardButton(text="💎 VIP — Premium kerak", callback_data="premium_info"))
@@ -157,12 +158,23 @@ def inline_watch_keyboard(bot_username: str, anime_id: int) -> InlineKeyboardMar
 
 def profile_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="📰 Activity feed",        callback_data="activity_feed"))
     kb.row(InlineKeyboardButton(text="➕ Pul kiritish",         callback_data="add_money"))
     kb.row(InlineKeyboardButton(text="🔗 Referral link",        callback_data="referral_link"))
     kb.row(InlineKeyboardButton(text="🧬 DNA Profil",           callback_data="my_dna"))
     kb.row(InlineKeyboardButton(text="🏆 Liderlar",             callback_data="leaderboard"))
     kb.row(InlineKeyboardButton(text="🌐 Tilni o'zgartirish",   callback_data="change_language"))
     kb.row(InlineKeyboardButton(text="🔙 Ortga",                callback_data="back_main"))
+    return kb.as_markup()
+
+
+def user_profile_keyboard(target_user_id: int, is_following: bool) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    if is_following:
+        kb.row(InlineKeyboardButton(text="➖ Unfollow", callback_data=f"unfollow_{target_user_id}"))
+    else:
+        kb.row(InlineKeyboardButton(text="➕ Follow", callback_data=f"follow_{target_user_id}"))
+    kb.row(InlineKeyboardButton(text="🔙 Ortga", callback_data="back_main"))
     return kb.as_markup()
 
 def premium_keyboard() -> InlineKeyboardMarkup:
