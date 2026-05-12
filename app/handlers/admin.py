@@ -47,15 +47,20 @@ class UserMessageStates(StatesGroup): user_id=State(); message=State()
 class SchedulePostStates(StatesGroup):anime_id=State(); datetime_str=State()
 
 
-def register_admin_handlers(router: Router, db: Database, admin_id: int):
+def register_admin_handlers(router: Router, db: Database, ADMIN_ID):
+    
 
-    def is_admin(uid): return uid == admin_id
+    def is_admin(uid):
+        print(ADMIN_ID)
+        return uid in ADMIN_ID
 
     @router.message(Command("admin"))
-    @router.message(Command("panel"))
     async def admin_panel(message: Message):
-        if not is_admin(message.from_user.id):
-            await message.answer("❌ Siz admin emassiz!"); return
+        user_id = message.from_user.id
+        if not is_admin(user_id):
+            # Debug uchun: admin_list ni ko'ramiz
+            await message.answer(f"❌ Siz admin emassiz!")
+            return
         await message.answer("👨‍💼 Admin panel:", reply_markup=admin_panel_keyboard())
 
     @router.callback_query(F.data == "back_admin")

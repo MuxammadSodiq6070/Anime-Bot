@@ -23,11 +23,20 @@ from utils.rate_limit import TokenBucketRateLimiter
 # .env faylini yuklash
 load_dotenv()
 BOT_TOKEN = getenv("BOT_TOKEN")
-try:
-    ADMIN_ID = int(getenv("ADMIN_ID") or "0")
-except ValueError:
-    ADMIN_ID = 0
+# try:
+#     ADMIN_ID = list(getenv("admin_id") or "hato")
+# except ValueError:
+#     ADMIN_ID = "hato"
 
+# 1. .env dan matnni olamiz
+raw_admin_id = getenv("admin_id") or ""
+
+# 2. Agar matn bo'sh bo'lmasa, uni vergul bilan bo'lib, har birini int (son) ga aylantiramiz
+if raw_admin_id:
+    # list() o'rniga split() ishlatamiz
+    ADMIN_ID = [int(i.strip()) for i in raw_admin_id.split(",") if i.strip()]
+else:
+    ADMIN_ID = []  # Yoki "hato" o'rniga bo'sh ro'yxat
 # Logging sozlamalari
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
